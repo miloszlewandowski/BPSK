@@ -7,9 +7,18 @@
 #include <math.h>
 #include <vector>
 #include <array>
+#include <pthread.h>
+#include <chrono>
+#include <tuple>
 
 
 #define BUFFER_SIZE 128
+
+struct EncodeFileJob {
+    std::string filePath;
+    std::string outputPath;
+    int totalTime;
+};
 
 int readBytesFromFile(std::ifstream *file,
                       char (*buffer)[BUFFER_SIZE],
@@ -21,13 +30,26 @@ int readBytesFromFile(std::ifstream *file,
     return readBytesCount;
 }
 
-void writeBytesToFile(std::ofstream *file,
+int writeBytesToFile(std::ofstream *file,
                       std::array<std::array<float, 8>, BUFFER_SIZE> (*buffer),
                       int atOffset,
                       int writeByteCount) {
     file->seekp(atOffset);
-    file->write(reinterpret_cast<char *>(buffer), writeByteCount);
+
+    int writtenSize = 0;
+    for (int i = 0; i < writeByteCount; i++) {
+        std::array<float, 8> e = (*buffer)[i];
+        for (int j = 0; j < 8; j++) {
+            short f = (short) round((e[j] * (2 << 13)));
+            std::string s = std::to_string(f) + ",";
+            file->write(s.c_str(), s.size());
+            writtenSize += s.size();
+        }
+    }
+    return writtenSize;
 }
+
+
 
 void encode(char (*input)[BUFFER_SIZE],
             std::array<std::array<float, 8>, BUFFER_SIZE> (*output),
@@ -51,7 +73,7 @@ void encode(char (*input)[BUFFER_SIZE],
     }
     for (int i = 0; i < byteCount; i++) {
         //how to encode a single byte
-        int inputByte = (int)(*input)[i];
+        int inputByte = (int) (*input)[i];
         std::array<float, 8> encodedInputByte;
         int j = 0;
         int bit = 0;
@@ -65,31 +87,60 @@ void encode(char (*input)[BUFFER_SIZE],
     }
 }
 
+void * encodeFile(void * args) {
+    EncodeFileJob *job = reinterpret_cast<EncodeFileJob *>(args);
+    int totalTime = 0;
+    int bytesRead1 = BUFFER_SIZE;
+    std::ifstream inputFile1 (job->filePath);
+    std::ofstream outputFile1 (job->outputPath);
+    char inputBuffer1[BUFFER_SIZE] = {0};
+    std::array<std::array<float, 8>, BUFFER_SIZE> outputBuffer;
+    int offsetRead = 0;
+    int offsetWrite = 0;
+    while (bytesRead1 == BUFFER_SIZE) {
+        bytesRead1 = readBytesFromFile(&inputFile1, &inputBuffer1, offsetRead);
+        if (bytesRead1 == 0) break;
+        auto start = std::chrono::high_resolution_clock::now();
+        encode(&inputBuffer1, &outputBuffer, bytesRead1);
+        auto finish = std::chrono::high_resolution_clock::now();
+        offsetWrite += writeBytesToFile(&outputFile1, &outputBuffer, offsetWrite, bytesRead1);
+        offsetRead += bytesRead1;
+        totalTime += std::chrono::duration_cast<std::chrono::nanoseconds>(finish-start).count();
+    }
+    job->totalTime = totalTime;
+}
+
 
 int main() {
 
-    // computational complexity = THETA(n)
-    // memory complexity = THETA(1)
+    std::vector<std::pair<std::string, std::string>> filePairs {
+        std::make_pair("../input1.txt", "../output1.txt"),
+        std::make_pair("../input2.txt", "../output2.txt"),
+        std::make_pair("../input3.txt", "../output3.txt"),
+    };
 
-    std::ifstream inputFile1 ("../input1.txt");
-    std::ofstream outputFile1 ("../output1.txt");
-    std::ifstream inputFile2 ("../input2.txt");
-    std::ofstream outputFile2 ("../output2.txt");
-    std::ifstream inputFile3 ("../input3.txt");
-    std::ofstream outputFile3 ("../output3.txt");
+    pthread_t *threads = new pthread_t[filePairs.size()];
+    EncodeFileJob **jobs = new EncodeFileJob*[filePairs.size()];
 
-    //This buffer is declared on the stack
-    char inputBuffer[BUFFER_SIZE] = {0};
-    std::array<std::array<float, 8>, BUFFER_SIZE> outputBuffer;
-
-    int offset = 0;
-    int bytesRead = BUFFER_SIZE;
-
-    while (bytesRead == BUFFER_SIZE) {
-        bytesRead = readBytesFromFile(&inputFile1, &inputBuffer, offset);
-        if (bytesRead == 0) break;
-        encode(&inputBuffer, &outputBuffer, bytesRead);
-        writeBytesToFile(&outputFile1, &outputBuffer, offset, bytesRead);
-        offset += bytesRead;
+//    for (auto filePair : filePairs) {
+    for (int i = 0; i < filePairs.size(); i++) {
+        auto filePair = filePairs[i];
+        EncodeFileJob *job = new EncodeFileJob();
+        job->filePath = std::get<0>(filePair);
+        job->outputPath = std::get<1>(filePair);
+        jobs[i] = job;
+        pthread_create(&threads[i], NULL, encodeFile, job);
     }
+
+    int totalTime = 0;
+    // synchronize to termination of all threads
+    for (int i = 0; i < filePairs.size(); i++) {
+        pthread_join(threads[i], NULL);
+        EncodeFileJob *job = jobs[i];
+        std::cout << "Time for file " << job->filePath << " : " << std::to_string(job->totalTime) << "ns" << std::endl;
+        totalTime += job->totalTime;
+    }
+
+    std::cout << "Total time: " << std::to_string(totalTime) << "ns" << std::endl;
+
 }
