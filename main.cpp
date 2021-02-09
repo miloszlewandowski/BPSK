@@ -17,7 +17,7 @@
 struct EncodeFileJob {
     std::string filePath;
     std::string outputPath;
-    int totalTime;
+    long totalTime;
 };
 
 int readBytesFromFile(std::ifstream *file,
@@ -49,30 +49,29 @@ int writeBytesToFile(std::ofstream *file,
     return writtenSize;
 }
 
-
-
 void encode(char (*input)[BUFFER_SIZE],
             std::array<std::array<float, 8>, BUFFER_SIZE> (*output),
             int byteCount) {
 
-    long fc = 10000;
+    long fc = 100;
     long fs = 4*fc;
     int amplitude = 2;
-    float timePerBit = 0.01;
+    float timePerBit = 0.03;
     int samplesPerBit = round(timePerBit*fs);
     float basicCosineBody = 2*3.14*fc/fs;
 
-    // signal patterns
     float sig1[samplesPerBit];
     memset( sig1, 0, samplesPerBit*sizeof(int));
     float sig0[samplesPerBit];
     memset( sig0, 0, samplesPerBit*sizeof(int));
+
     for (int i = 0; i < samplesPerBit-1; i++){
         sig1[i] = amplitude*cos(basicCosineBody*i);
         sig0[i] = -amplitude*cos(basicCosineBody*i);
     }
+
     for (int i = 0; i < byteCount; i++) {
-        //how to encode a single byte
+
         int inputByte = (int) (*input)[i];
         std::array<float, 8> encodedInputByte;
         int j = 0;
@@ -89,7 +88,7 @@ void encode(char (*input)[BUFFER_SIZE],
 
 void * encodeFile(void * args) {
     EncodeFileJob *job = reinterpret_cast<EncodeFileJob *>(args);
-    int totalTime = 0;
+    long totalTime = 0;
     int bytesRead1 = BUFFER_SIZE;
     std::ifstream inputFile1 (job->filePath);
     std::ofstream outputFile1 (job->outputPath);
@@ -111,7 +110,10 @@ void * encodeFile(void * args) {
 }
 
 
+
 int main() {
+
+    auto t1 = std::chrono::high_resolution_clock::now();
 
     std::vector<std::pair<std::string, std::string>> filePairs {
         std::make_pair("../input1.txt", "../output1.txt"),
@@ -122,7 +124,6 @@ int main() {
     pthread_t *threads = new pthread_t[filePairs.size()];
     EncodeFileJob **jobs = new EncodeFileJob*[filePairs.size()];
 
-//    for (auto filePair : filePairs) {
     for (int i = 0; i < filePairs.size(); i++) {
         auto filePair = filePairs[i];
         EncodeFileJob *job = new EncodeFileJob();
@@ -132,8 +133,8 @@ int main() {
         pthread_create(&threads[i], NULL, encodeFile, job);
     }
 
-    int totalTime = 0;
-    // synchronize to termination of all threads
+    long totalTime = 0;
+
     for (int i = 0; i < filePairs.size(); i++) {
         pthread_join(threads[i], NULL);
         EncodeFileJob *job = jobs[i];
@@ -141,6 +142,12 @@ int main() {
         totalTime += job->totalTime;
     }
 
-    std::cout << "Total time: " << std::to_string(totalTime) << "ns" << std::endl;
+    auto t2 = std::chrono::high_resolution_clock::now();
+    long totalProgrammeTime = 0;
+    totalProgrammeTime += std::chrono::duration_cast<std::chrono::nanoseconds>(t2-t1).count();
 
+    std::cout << "Total time of encoding: " << std::to_string(totalTime) << "ns" << std::endl;
+    std::cout << "Total time of programme working: " << std::to_string(totalProgrammeTime) << "ns" << std::endl;
+
+    return EXIT_SUCCESS;
 }
